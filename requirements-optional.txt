@@ -1,0 +1,3 @@
+# Optional explainability extras
+# Install only if you want SHAP values in addition to permutation importance.
+shap>=0.46

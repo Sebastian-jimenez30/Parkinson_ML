@@ -1,0 +1,2 @@
+SHAP not generated. Install optional dependency or check compatibility.
+Detail: No module named 'shap'
