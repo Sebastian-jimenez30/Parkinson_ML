@@ -1,11 +1,15 @@
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 
 
-BINARY_POSITIVE_LABEL = 1
+MULTICLASS_LABELS: Dict[int, str] = {
+    0: "Healthy",
+    1: "Parkinson",
+    2: "Other neurological diagnosis",
+}
 
 
 def load_metadata(preprocessed_dir: Path) -> pd.DataFrame:
@@ -15,8 +19,12 @@ def load_metadata(preprocessed_dir: Path) -> pd.DataFrame:
     return df
 
 
-def build_binary_target(df: pd.DataFrame) -> np.ndarray:
-    return (df["label"].astype(int) == BINARY_POSITIVE_LABEL).astype(np.int32).values
+def build_multiclass_target(df: pd.DataFrame) -> np.ndarray:
+    labels = df["label"].astype(int).values
+    unknown = sorted(set(np.unique(labels)) - set(MULTICLASS_LABELS.keys()))
+    if unknown:
+        raise ValueError(f"Unexpected class labels found: {unknown}")
+    return labels.astype(np.int32)
 
 
 def get_subject_ids(df: pd.DataFrame) -> List[str]:

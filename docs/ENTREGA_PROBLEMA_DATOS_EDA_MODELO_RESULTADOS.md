@@ -248,9 +248,9 @@ Tras seleccionar modelo ganador, el sistema genera:
 
 Salidas de referencia (corrida completa):
 
-- [outputs_fullstep/report_model.md](outputs_fullstep/report_model.md)
-- [outputs_fullstep/report_model.pdf](outputs_fullstep/report_model.pdf)
-- [outputs_fullstep/cv_summary_metrics.csv](outputs_fullstep/cv_summary_metrics.csv)
+- [outputs/report_model.md](outputs/report_model.md)
+- [outputs/report_model.pdf](outputs/report_model.pdf)
+- [outputs/cv_summary_metrics.csv](outputs/cv_summary_metrics.csv)
 
 ## 5. Resultados: conclusiones y hallazgos obtenidos
 
@@ -264,12 +264,17 @@ Resumen observado en la corrida validada:
 
 Valores registrados en:
 
-- [outputs_fullstep/cv_summary_metrics.csv](outputs_fullstep/cv_summary_metrics.csv)
+- [outputs/cv_summary_metrics.csv](outputs/cv_summary_metrics.csv)
 
 Hallazgo clave:
 
 - El modelo de boosting ofrece el mejor equilibrio entre detectar Parkinson (sensibilidad) y no sobrediagnosticar (especificidad), bajo la definicion binaria adoptada.
 
+Reportes y salidas:
+
+- [outputs/report_model.md](outputs/report_model.md)
+- [outputs/report_model.pdf](outputs/report_model.pdf)
+- [outputs/cv_summary_metrics.csv](outputs/cv_summary_metrics.csv)
 ### 5.2 Interpretacion clinico-tecnica
 
 1. El problema no es trivial porque la clase negativa incluye trastornos de movimiento parecidos a Parkinson.
@@ -306,6 +311,6 @@ Scripts de ejecucion:
 
 Reportes y salidas:
 
-- [outputs_fullstep/report_model.md](outputs_fullstep/report_model.md)
-- [outputs_fullstep/report_model.pdf](outputs_fullstep/report_model.pdf)
-- [outputs_fullstep/cv_summary_metrics.csv](outputs_fullstep/cv_summary_metrics.csv)
+- [outputs/report_model.md](outputs/report_model.md)
+- [outputs/report_model.pdf](outputs/report_model.pdf)
+- [outputs/cv_summary_metrics.csv](outputs/cv_summary_metrics.csv)

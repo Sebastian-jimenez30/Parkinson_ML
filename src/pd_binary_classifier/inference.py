@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Union
 
 import joblib
 import numpy as np
@@ -40,7 +40,7 @@ def build_subject_feature_vector(config: DatasetConfig, subject_id: str) -> np.n
     return row
 
 
-def predict_one_subject(model_path: Path, subject_id: str) -> Dict[str, float]:
+def predict_one_subject(model_path: Path, subject_id: str) -> Dict[str, Union[str, int, float]]:
     artifact = joblib.load(model_path)
     cfg = artifact["config"]
     model = artifact["model"]
@@ -55,11 +55,19 @@ def predict_one_subject(model_path: Path, subject_id: str) -> Dict[str, float]:
 
     sid = str(subject_id).zfill(3)
     x = build_subject_feature_vector(config, sid).reshape(1, -1)
-    proba = float(model.predict_proba(x)[0, 1])
-    pred = int(proba >= 0.5)
+    probs_raw = model.predict_proba(x)[0]
+    classes = [int(c) for c in model.classes_]
 
-    return {
+    prob_by_class = {f"probability_class_{cls}": float(p) for cls, p in zip(classes, probs_raw)}
+    pred_class = int(classes[int(np.argmax(probs_raw))])
+
+    class_mapping = artifact.get("class_mapping_source", {})
+    pred_name = class_mapping.get(str(pred_class), f"class_{pred_class}")
+
+    out: Dict[str, Union[str, int, float]] = {
         "subject_id": sid,
-        "predicted_label": pred,
-        "probability_parkinson": proba,
+        "predicted_label": pred_class,
+        "predicted_label_name": pred_name,
     }
+    out.update(prob_by_class)
+    return out

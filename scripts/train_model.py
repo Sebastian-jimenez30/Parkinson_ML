@@ -7,12 +7,12 @@ SRC = ROOT / "src"
 sys.path.insert(0, str(SRC))
 
 from pd_binary_classifier.config import DatasetConfig, DEFAULT_PREPROCESSED_DIR
-from pd_binary_classifier.training import train_binary_pipeline
+from pd_binary_classifier.training import train_multiclass_pipeline
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train a reproducible binary classifier: Parkinson vs Non-Parkinson"
+        description="Train a reproducible multiclass classifier: Healthy vs Parkinson vs Other neurological diagnosis"
     )
     parser.add_argument(
         "--data-dir",
@@ -40,7 +40,7 @@ def main() -> None:
     args = parse_args()
 
     config = DatasetConfig(preprocessed_dir=args.data_dir)
-    paths = train_binary_pipeline(
+    paths = train_multiclass_pipeline(
         config=config,
         output_dir=args.output_dir,
         seed=args.seed,

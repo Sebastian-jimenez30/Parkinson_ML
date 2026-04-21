@@ -11,7 +11,7 @@ from pd_binary_classifier.inference import predict_one_subject
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Predict Parkinson probability for one subject id"
+        description="Predict multiclass label for one subject id"
     )
     parser.add_argument(
         "--subject-id",

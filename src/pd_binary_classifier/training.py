@@ -11,14 +11,15 @@ from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassif
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
+    average_precision_score,
     balanced_accuracy_score,
     confusion_matrix,
     f1_score,
     precision_recall_curve,
     precision_score,
     recall_score,
-    roc_curve,
     roc_auc_score,
+    roc_curve,
 )
 from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
@@ -26,8 +27,9 @@ from sklearn.preprocessing import StandardScaler
 
 from .config import DatasetConfig
 from .data import (
-    build_binary_target,
+    MULTICLASS_LABELS,
     build_demographic_features,
+    build_multiclass_target,
     get_subject_ids,
     load_metadata,
     load_movement_array,
@@ -41,76 +43,85 @@ from .features import (
 )
 
 
-def _compute_metrics(y_true: np.ndarray, y_prob: np.ndarray, threshold: float = 0.5) -> Dict[str, float]:
-    y_pred = (y_prob >= threshold).astype(int)
-    bal_acc = balanced_accuracy_score(y_true, y_pred)
-    f1 = f1_score(y_true, y_pred)
-
-    if len(np.unique(y_true)) == 2:
-        roc_auc = roc_auc_score(y_true, y_prob)
-    else:
-        roc_auc = 0.0
-
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
-    sensitivity = tp / (tp + fn + 1e-12)
-    specificity = tn / (tn + fp + 1e-12)
-
-    return {
-        "balanced_accuracy": float(bal_acc),
-        "roc_auc": float(roc_auc),
-        "f1": float(f1),
-        "sensitivity": float(sensitivity),
-        "specificity": float(specificity),
+def _compute_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarray) -> Dict[str, float]:
+    out: Dict[str, float] = {
+        "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
+        "f1_macro": float(f1_score(y_true, y_pred, average="macro", zero_division=0)),
+        "precision_macro": float(
+            precision_score(y_true, y_pred, average="macro", zero_division=0)
+        ),
+        "recall_macro": float(recall_score(y_true, y_pred, average="macro", zero_division=0)),
     }
+
+    try:
+        out["roc_auc_ovr_macro"] = float(
+            roc_auc_score(y_true, y_prob, multi_class="ovr", average="macro")
+        )
+    except Exception:
+        out["roc_auc_ovr_macro"] = 0.0
+
+    try:
+        out["pr_auc_ovr_macro"] = float(
+            average_precision_score(y_true, y_prob, average="macro")
+        )
+    except Exception:
+        out["pr_auc_ovr_macro"] = 0.0
+
+    return out
 
 
 def _save_classification_plots(
     y_true: np.ndarray,
     y_prob: np.ndarray,
+    y_pred: np.ndarray,
     output_dir: Path,
-    threshold: float = 0.5,
+    class_ids: List[int],
 ) -> Dict[str, str]:
-    y_pred = (y_prob >= threshold).astype(int)
+    names = [MULTICLASS_LABELS[c] for c in class_ids]
 
-    # ROC curve
-    fpr, tpr, _ = roc_curve(y_true, y_prob)
-    roc_auc = roc_auc_score(y_true, y_prob)
-    roc_path = output_dir / "plot_roc_curve.png"
-    plt.figure(figsize=(6, 5))
-    plt.plot(fpr, tpr, label=f"AUC = {roc_auc:.3f}")
+    roc_path = output_dir / "plot_roc_curve_ovr.png"
+    plt.figure(figsize=(7, 5.5))
+    for idx, cls in enumerate(class_ids):
+        y_bin = (y_true == cls).astype(int)
+        fpr, tpr, _ = roc_curve(y_bin, y_prob[:, idx])
+        auc = roc_auc_score(y_bin, y_prob[:, idx])
+        plt.plot(fpr, tpr, label=f"{MULTICLASS_LABELS[cls]} (AUC={auc:.3f})")
     plt.plot([0, 1], [0, 1], linestyle="--", linewidth=1)
     plt.xlabel("False Positive Rate")
     plt.ylabel("True Positive Rate")
-    plt.title("ROC Curve (OOF)")
+    plt.title("ROC OVR (OOF)")
     plt.legend(loc="lower right")
     plt.tight_layout()
     plt.savefig(roc_path, dpi=150)
     plt.close()
 
-    # Precision-recall curve
-    precision, recall, _ = precision_recall_curve(y_true, y_prob)
-    pr_path = output_dir / "plot_pr_curve.png"
-    plt.figure(figsize=(6, 5))
-    plt.plot(recall, precision)
+    pr_path = output_dir / "plot_pr_curve_ovr.png"
+    plt.figure(figsize=(7, 5.5))
+    for idx, cls in enumerate(class_ids):
+        y_bin = (y_true == cls).astype(int)
+        precision, recall, _ = precision_recall_curve(y_bin, y_prob[:, idx])
+        ap = average_precision_score(y_bin, y_prob[:, idx])
+        plt.plot(recall, precision, label=f"{MULTICLASS_LABELS[cls]} (AP={ap:.3f})")
     plt.xlabel("Recall")
     plt.ylabel("Precision")
-    plt.title("Precision-Recall Curve (OOF)")
+    plt.title("Precision-Recall OVR (OOF)")
+    plt.legend(loc="lower left")
     plt.tight_layout()
     plt.savefig(pr_path, dpi=150)
     plt.close()
 
-    # Confusion matrix
-    cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+    cm = confusion_matrix(y_true, y_pred, labels=class_ids)
     cm_path = output_dir / "plot_confusion_matrix.png"
-    plt.figure(figsize=(5.5, 5))
+    plt.figure(figsize=(6.5, 5.5))
     plt.imshow(cm, cmap="Blues")
-    plt.title(f"Confusion Matrix (threshold={threshold:.2f})")
+    plt.title("Confusion Matrix (Multiclass OOF)")
     plt.xlabel("Predicted")
     plt.ylabel("True")
-    plt.xticks([0, 1], ["Non-PD", "PD"])
-    plt.yticks([0, 1], ["Non-PD", "PD"])
-    for i in range(2):
-        for j in range(2):
+    ticks = np.arange(len(class_ids))
+    plt.xticks(ticks, names, rotation=20, ha="right")
+    plt.yticks(ticks, names)
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
             plt.text(j, i, str(cm[i, j]), ha="center", va="center")
     plt.tight_layout()
     plt.savefig(cm_path, dpi=150)
@@ -132,13 +143,12 @@ def _save_explainability(
     seed: int,
 ) -> Dict[str, str]:
     out: Dict[str, str] = {}
-
     rng = np.random.default_rng(seed)
 
-    # Use model-driven ranking to keep permutation explainability computationally practical.
     model = fitted_pipeline.steps[-1][1]
     if hasattr(model, "coef_"):
-        base_rank = np.abs(np.ravel(model.coef_))
+        coef = np.array(model.coef_)
+        base_rank = np.mean(np.abs(coef), axis=0)
     elif hasattr(model, "feature_importances_"):
         base_rank = np.ravel(model.feature_importances_)
     else:
@@ -147,18 +157,18 @@ def _save_explainability(
     max_candidates = min(120, X.shape[1])
     candidate_idx = np.argsort(base_rank)[::-1][:max_candidates]
 
-    baseline_prob = fitted_pipeline.predict_proba(X)[:, 1]
-    baseline_metric = balanced_accuracy_score(y, (baseline_prob >= 0.5).astype(int))
+    baseline_pred = fitted_pipeline.predict(X)
+    baseline_metric = balanced_accuracy_score(y, baseline_pred)
 
     rows = []
     n_repeats = 5
     for j in candidate_idx:
         scores = []
         for _ in range(n_repeats):
-            Xp = X.copy()
-            Xp[:, j] = Xp[rng.permutation(X.shape[0]), j]
-            p = fitted_pipeline.predict_proba(Xp)[:, 1]
-            s = balanced_accuracy_score(y, (p >= 0.5).astype(int))
+            xp = X.copy()
+            xp[:, j] = xp[rng.permutation(X.shape[0]), j]
+            yp = fitted_pipeline.predict(xp)
+            s = balanced_accuracy_score(y, yp)
             scores.append(baseline_metric - s)
         rows.append(
             {
@@ -177,39 +187,38 @@ def _save_explainability(
     perm_plot = output_dir / "plot_permutation_top20.png"
     plt.figure(figsize=(8, 7))
     plt.barh(topk["feature"], topk["importance_mean"])
-    plt.xlabel("Permutation Importance (mean balanced accuracy drop)")
-    plt.title("Top 20 Features by Permutation Importance")
+    plt.xlabel("Permutation importance (balanced accuracy drop)")
+    plt.title("Top 20 features by permutation importance")
     plt.tight_layout()
     plt.savefig(perm_plot, dpi=150)
     plt.close()
     out["permutation_plot"] = str(perm_plot)
 
-    # Optional SHAP computation.
     shap_status_path = output_dir / "explainability_shap_status.txt"
     try:
         import shap  # type: ignore
 
-        # Transform features as the model sees them.
         if len(fitted_pipeline.steps) > 1:
-            preprocess = Pipeline(fitted_pipeline.steps[:-1])
+            preprocess = Pipeline(fitted_pipeline.steps[:-1], memory=None)
             model = fitted_pipeline.steps[-1][1]
-            X_trans = preprocess.transform(X)
+            x_trans = preprocess.transform(X)
         else:
             model = fitted_pipeline.steps[-1][1]
-            X_trans = X
+            x_trans = X
 
-        n_sample = min(200, X_trans.shape[0])
-        rng = np.random.default_rng(seed)
-        idx = rng.choice(np.arange(X_trans.shape[0]), size=n_sample, replace=False)
-        X_sample = X_trans[idx]
+        n_sample = min(200, x_trans.shape[0])
+        idx = rng.choice(np.arange(x_trans.shape[0]), size=n_sample, replace=False)
+        x_sample = x_trans[idx]
 
-        explainer = shap.Explainer(model, X_sample)
-        shap_values = explainer(X_sample)
-
+        explainer = shap.Explainer(model, x_sample)
+        shap_values = explainer(x_sample)
         values = np.array(shap_values.values)
+
         if values.ndim == 3:
-            values = values[:, :, 1]
-        mean_abs = np.mean(np.abs(values), axis=0)
+            # (samples, features, classes)
+            mean_abs = np.mean(np.abs(values), axis=(0, 2))
+        else:
+            mean_abs = np.mean(np.abs(values), axis=0)
 
         shap_df = pd.DataFrame(
             {"feature": feature_names, "mean_abs_shap": mean_abs}
@@ -223,7 +232,7 @@ def _save_explainability(
         plt.figure(figsize=(8, 7))
         plt.barh(shap_top["feature"], shap_top["mean_abs_shap"])
         plt.xlabel("Mean |SHAP value|")
-        plt.title("Top 20 Features by SHAP")
+        plt.title("Top 20 features by SHAP")
         plt.tight_layout()
         plt.savefig(shap_plot, dpi=150)
         plt.close()
@@ -246,7 +255,7 @@ def _save_markdown_report(
     best_metrics: Dict[str, float],
     summary_df: pd.DataFrame,
     artifact_paths: Dict[str, str],
-    threshold: float,
+    class_ids: List[int],
 ) -> str:
     report_path = output_dir / "report_model.md"
 
@@ -261,40 +270,38 @@ def _save_markdown_report(
                 vals.append(str(v))
         summary_table += "| " + " | ".join(vals) + " |\n"
 
+    class_lines = [f"- {c}: {MULTICLASS_LABELS[c]}" for c in class_ids]
+
     lines = [
-        "# Binary Parkinson Classifier Report",
+        "# Multiclass Parkinson Classifier Report",
         "",
         "## Problem Definition",
-        "- Positive class: Parkinson (original label=1)",
-        "- Negative class: Non-Parkinson (original labels 0 and 2)",
+        "- Multiclass classification with three labels:",
+        *class_lines,
         "",
         "## Selected Model",
         f"- Best model by balanced accuracy: **{best_model_name}**",
-        f"- Decision threshold: **{threshold:.2f}**",
         "",
         "## Out-of-Fold Metrics (Best Model)",
         f"- Balanced Accuracy: **{best_metrics['balanced_accuracy']:.4f}**",
-        f"- ROC AUC: **{best_metrics['roc_auc']:.4f}**",
-        f"- F1: **{best_metrics['f1']:.4f}**",
-        f"- Sensitivity: **{best_metrics['sensitivity']:.4f}**",
-        f"- Specificity: **{best_metrics['specificity']:.4f}**",
+        f"- F1 Macro: **{best_metrics['f1_macro']:.4f}**",
+        f"- Precision Macro: **{best_metrics['precision_macro']:.4f}**",
+        f"- Recall Macro: **{best_metrics['recall_macro']:.4f}**",
+        f"- ROC AUC OVR Macro: **{best_metrics['roc_auc_ovr_macro']:.4f}**",
+        f"- PR AUC OVR Macro: **{best_metrics['pr_auc_ovr_macro']:.4f}**",
         "",
         "## Cross-Validation Model Comparison",
         summary_table,
         "",
         "## Generated Artifacts",
-        f"- ROC curve: {artifact_paths.get('roc_plot', 'N/A')}",
-        f"- PR curve: {artifact_paths.get('pr_plot', 'N/A')}",
+        f"- ROC OVR curve: {artifact_paths.get('roc_plot', 'N/A')}",
+        f"- PR OVR curve: {artifact_paths.get('pr_plot', 'N/A')}",
         f"- Confusion matrix: {artifact_paths.get('cm_plot', 'N/A')}",
         f"- Permutation importance CSV: {artifact_paths.get('permutation_importance_csv', 'N/A')}",
         f"- Permutation plot: {artifact_paths.get('permutation_plot', 'N/A')}",
         f"- SHAP CSV (optional): {artifact_paths.get('shap_csv', 'N/A')}",
         f"- SHAP plot (optional): {artifact_paths.get('shap_plot', 'N/A')}",
         f"- SHAP status: {artifact_paths.get('shap_status', 'N/A')}",
-        "",
-        "## Notes",
-        "- OOF means out-of-fold predictions from stratified CV.",
-        "- Permutation importance is model-agnostic and directly comparable across all features.",
     ]
 
     report_path.write_text("\n".join(lines), encoding="utf-8")
@@ -310,16 +317,16 @@ def _save_pdf_report(
 ) -> str:
     pdf_path = output_dir / "report_model.pdf"
     with PdfPages(pdf_path) as pdf:
-        # Page 1: textual summary
         fig = plt.figure(figsize=(11, 8.5))
-        fig.suptitle("Binary Parkinson Classifier Report", fontsize=16)
+        fig.suptitle("Multiclass Parkinson Classifier Report", fontsize=16)
         text = (
             f"Best model: {best_model_name}\n"
             f"Balanced Accuracy: {best_metrics['balanced_accuracy']:.4f}\n"
-            f"ROC AUC: {best_metrics['roc_auc']:.4f}\n"
-            f"F1: {best_metrics['f1']:.4f}\n"
-            f"Sensitivity: {best_metrics['sensitivity']:.4f}\n"
-            f"Specificity: {best_metrics['specificity']:.4f}"
+            f"F1 Macro: {best_metrics['f1_macro']:.4f}\n"
+            f"Precision Macro: {best_metrics['precision_macro']:.4f}\n"
+            f"Recall Macro: {best_metrics['recall_macro']:.4f}\n"
+            f"ROC AUC OVR Macro: {best_metrics['roc_auc_ovr_macro']:.4f}\n"
+            f"PR AUC OVR Macro: {best_metrics['pr_auc_ovr_macro']:.4f}"
         )
         fig.text(0.06, 0.78, text, fontsize=11, va="top")
 
@@ -337,7 +344,6 @@ def _save_pdf_report(
         pdf.savefig(fig)
         plt.close(fig)
 
-        # Image pages
         for key in ["roc_plot", "pr_plot", "cm_plot", "permutation_plot", "shap_plot"]:
             img_path = artifact_paths.get(key)
             if not img_path:
@@ -358,7 +364,7 @@ def _save_pdf_report(
 
 def build_feature_table(config: DatasetConfig) -> Tuple[np.ndarray, np.ndarray, List[str], List[str]]:
     df = load_metadata(config.preprocessed_dir)
-    y = build_binary_target(df)
+    y = build_multiclass_target(df)
     subject_ids = get_subject_ids(df)
 
     demog_df, demog_names = build_demographic_features(df)
@@ -408,7 +414,8 @@ def _make_models(seed: int) -> Dict[str, Pipeline]:
                         random_state=seed,
                     ),
                 ),
-            ]
+            ],
+            memory=None,
         ),
         "random_forest": Pipeline(
             steps=[
@@ -418,11 +425,14 @@ def _make_models(seed: int) -> Dict[str, Pipeline]:
                     RandomForestClassifier(
                         n_estimators=600,
                         class_weight="balanced_subsample",
+                        max_features="sqrt",
+                        min_samples_leaf=1,
                         random_state=seed,
                         n_jobs=-1,
                     ),
                 ),
-            ]
+            ],
+            memory=None,
         ),
         "hist_gradient_boosting": Pipeline(
             steps=[
@@ -436,12 +446,13 @@ def _make_models(seed: int) -> Dict[str, Pipeline]:
                         random_state=seed,
                     ),
                 ),
-            ]
+            ],
+            memory=None,
         ),
     }
 
 
-def train_binary_pipeline(
+def train_multiclass_pipeline(
     config: DatasetConfig,
     output_dir: Path,
     seed: int = 42,
@@ -451,11 +462,12 @@ def train_binary_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     X, y, feature_names, subject_ids = build_feature_table(config)
+    class_ids = sorted(np.unique(y).tolist())
 
     np.save(output_dir / "X_features.npy", X)
-    np.save(output_dir / "y_binary.npy", y)
+    np.save(output_dir / "y_multiclass.npy", y)
     pd.DataFrame({"subject_id": subject_ids, "y": y}).to_csv(
-        output_dir / "subjects_binary_labels.csv", index=False
+        output_dir / "subjects_multiclass_labels.csv", index=False
     )
     with open(output_dir / "feature_names.json", "w", encoding="utf-8") as f:
         json.dump(feature_names, f, ensure_ascii=True, indent=2)
@@ -467,27 +479,29 @@ def train_binary_pipeline(
     summary_rows: List[Dict[str, float]] = []
     oof_by_model: Dict[str, np.ndarray] = {}
 
-    best_name = None
+    best_name = ""
     best_score = -1.0
 
     for model_name, model in models.items():
         model_fold_metrics = []
-        oof_prob = np.zeros_like(y, dtype=np.float64)
+        oof_prob = np.zeros((y.shape[0], len(class_ids)), dtype=np.float64)
 
         for fold_idx, (tr_idx, te_idx) in enumerate(skf.split(X, y), start=1):
-            X_tr, X_te = X[tr_idx], X[te_idx]
+            x_tr, x_te = X[tr_idx], X[te_idx]
             y_tr, y_te = y[tr_idx], y[te_idx]
 
-            model.fit(X_tr, y_tr)
-            y_prob = model.predict_proba(X_te)[:, 1]
-            oof_prob[te_idx] = y_prob
-            met = _compute_metrics(y_te, y_prob, threshold=0.5)
+            model.fit(x_tr, y_tr)
+            fold_prob_raw = model.predict_proba(x_te)
+            fold_prob = np.zeros((x_te.shape[0], len(class_ids)), dtype=np.float64)
+            for col_idx, cls in enumerate(model.classes_):
+                target_col = class_ids.index(int(cls))
+                fold_prob[:, target_col] = fold_prob_raw[:, col_idx]
 
-            met_row = {
-                "model": model_name,
-                "fold": fold_idx,
-                **met,
-            }
+            oof_prob[te_idx] = fold_prob
+            y_pred = np.array([class_ids[i] for i in np.argmax(fold_prob, axis=1)], dtype=np.int32)
+            met = _compute_metrics(y_te, y_pred, fold_prob)
+
+            met_row = {"model": model_name, "fold": fold_idx, **met}
             fold_rows.append(met_row)
             model_fold_metrics.append(met)
 
@@ -498,10 +512,11 @@ def train_binary_pipeline(
             "model": model_name,
             "balanced_accuracy_mean": float(dfm["balanced_accuracy"].mean()),
             "balanced_accuracy_std": float(dfm["balanced_accuracy"].std(ddof=0)),
-            "roc_auc_mean": float(dfm["roc_auc"].mean()),
-            "f1_mean": float(dfm["f1"].mean()),
-            "sensitivity_mean": float(dfm["sensitivity"].mean()),
-            "specificity_mean": float(dfm["specificity"].mean()),
+            "f1_macro_mean": float(dfm["f1_macro"].mean()),
+            "precision_macro_mean": float(dfm["precision_macro"].mean()),
+            "recall_macro_mean": float(dfm["recall_macro"].mean()),
+            "roc_auc_ovr_macro_mean": float(dfm["roc_auc_ovr_macro"].mean()),
+            "pr_auc_ovr_macro_mean": float(dfm["pr_auc_ovr_macro"].mean()),
         }
         summary_rows.append(agg)
 
@@ -516,16 +531,15 @@ def train_binary_pipeline(
     folds_df.to_csv(output_dir / "cv_fold_metrics.csv", index=False)
     summary_df.to_csv(output_dir / "cv_summary_metrics.csv", index=False)
 
-    # Save out-of-fold predictions for each model.
     for model_name, oof in oof_by_model.items():
-        pd.DataFrame(
-            {
-                "subject_id": subject_ids,
-                "y_true": y,
-                "y_prob": oof,
-                "y_pred_t05": (oof >= 0.5).astype(int),
-            }
-        ).to_csv(output_dir / f"oof_predictions_{model_name}.csv", index=False)
+        out = {
+            "subject_id": subject_ids,
+            "y_true": y,
+            "y_pred": np.array([class_ids[i] for i in np.argmax(oof, axis=1)], dtype=np.int32),
+        }
+        for idx, cls in enumerate(class_ids):
+            out[f"y_prob_class_{cls}"] = oof[:, idx]
+        pd.DataFrame(out).to_csv(output_dir / f"oof_predictions_{model_name}.csv", index=False)
 
     best_model = models[best_name]
     best_model.fit(X, y)
@@ -544,14 +558,11 @@ def train_binary_pipeline(
             "n_splits": n_splits,
         },
         "label_definition": {
-            "positive": "Parkinson",
-            "negative": "Healthy + Other diagnoses",
-        },
-        "class_mapping_source": {
             "0": "Healthy",
             "1": "Parkinson",
-            "2": "Other diagnoses",
+            "2": "Other neurological diagnosis",
         },
+        "class_mapping_source": {str(k): v for k, v in MULTICLASS_LABELS.items()},
     }
 
     model_path = output_dir / "model_best.joblib"
@@ -566,13 +577,15 @@ def train_binary_pipeline(
 
     if generate_analysis:
         best_oof = oof_by_model[best_name]
-        best_metrics = _compute_metrics(y, best_oof, threshold=0.5)
+        best_pred = np.array([class_ids[i] for i in np.argmax(best_oof, axis=1)], dtype=np.int32)
+        best_metrics = _compute_metrics(y, best_pred, best_oof)
 
         plot_paths = _save_classification_plots(
             y_true=y,
             y_prob=best_oof,
+            y_pred=best_pred,
             output_dir=output_dir,
-            threshold=0.5,
+            class_ids=class_ids,
         )
         explain_paths = _save_explainability(
             fitted_pipeline=best_model,
@@ -590,7 +603,7 @@ def train_binary_pipeline(
             best_metrics=best_metrics,
             summary_df=summary_df,
             artifact_paths=analysis_paths,
-            threshold=0.5,
+            class_ids=class_ids,
         )
         pdf_report = _save_pdf_report(
             output_dir=output_dir,
@@ -610,3 +623,7 @@ def train_binary_pipeline(
         )
 
     return output_paths
+
+
+# Backward-compatible alias.
+train_binary_pipeline = train_multiclass_pipeline
