@@ -1,316 +1,245 @@
 # Entrega: Problema, Datos, EDA, Modelo y Resultados
 
-## 1. El problema: definicion clara del reto a resolver
+## 1. El problema
 
-El reto de este proyecto es construir un clasificador binario que, a partir de senales de smartwatch, cuestionarios de sintomas no motores y variables clinicas/demograficas, determine si un sujeto pertenece a la clase:
+El objetivo de este proyecto es construir un sistema de clasificacion supervisada que permita distinguir entre tres estados clinicamente relevantes:
 
-- Parkinson (clase positiva)
-- No Parkinson (clase negativa)
+- Healthy: sujeto sano
+- Parkinson: sujeto con diagnostico de enfermedad de Parkinson
+- Other neurological diagnosis: sujeto con otro diagnostico neurologico relacionado con alteraciones del movimiento
 
-La formulacion binaria adoptada fue:
+Este planteamiento es mas robusto que una formulacion binaria porque obliga al modelo a resolver una tarea mas cercana a la practica clinica real. En lugar de separar solo Parkinson contra no Parkinson, el sistema debe reconocer si una persona es sana, si presenta Parkinson o si tiene otra condicion neurologica que puede generar patrones similares en las senales.
 
-- Positivo: sujetos con diagnostico Parkinson (label original = 1)
-- Negativo: sujetos Healthy + otros diagnosticos de movimiento (labels originales = 0 y 2)
+El problema se formula a partir de informacion multimodal recogida por smartwatch, cuestionarios de sintomas y variables demograficas y clinicas. La meta no es solo predecir una clase, sino hacerlo de forma reproducible, auditable y con un criterio de evaluacion que no favorezca artificialmente a la clase mayoritaria.
 
-Esta definicion responde a un escenario clinico realista de tamizaje inicial, donde el sistema debe separar Parkinson de un conjunto heterogeneo de no-Parkinson, en lugar de compararlo unicamente contra controles sanos.
+## 2. Datos
 
-Objetivo tecnico del modelo:
+La base de datos seleccionada fue PADS, un conjunto de datos de smartwatch orientado al estudio de trastornos del movimiento. Para este proyecto se trabajo con la version ya estructurada y procesada del conjunto de datos, porque permite construir un pipeline uniforme para todos los sujetos y evita inconsistencias de formato.
 
-1. Maximizar la capacidad discriminativa entre ambas clases.
-2. Mantener equilibrio entre sensibilidad y especificidad.
-3. Ser reproducible y auditable (pipeline completo, artefactos y reportes automaticos).
+Los insumos principales utilizados por el modelo fueron:
 
-## 2. Datos: la base de datos seleccionada
+- La tabla de metadatos por sujeto, donde se encuentra la etiqueta de clase y variables demograficas o clinicas.
+- Las senales de movimiento, almacenadas como series temporales multicanal por sujeto.
+- El cuestionario de sintomas no motores, con 30 respuestas binarias por sujeto.
 
-La base utilizada fue PADS (Parkinsons Disease Smartwatch dataset), disponible localmente en:
+La estructura de trabajo mantiene una representacion por sujeto compuesta por tres bloques:
 
-- [Data/pads-parkinsons-disease-smartwatch-dataset-1.0.0](Data/pads-parkinsons-disease-smartwatch-dataset-1.0.0)
+1. Movimiento: senales temporales multicanal.
+2. Cuestionario: variables binarias del estado de sintomas.
+3. Metadata: variables numericas, booleanas y categoricas.
 
-Para entrenamiento del modelo se uso la version preprocesada oficial del dataset en:
+En el conjunto utilizado se observan tres clases originales:
 
-- [Data/pads-parkinsons-disease-smartwatch-dataset-1.0.0/preprocessed](Data/pads-parkinsons-disease-smartwatch-dataset-1.0.0/preprocessed)
+- 0: Healthy
+- 1: Parkinson
+- 2: Other neurological diagnosis
 
-Archivos principales consumidos por el pipeline:
+La distribucion no es perfectamente equilibrada, por lo que el analisis y la validacion debian centrarse en metricas robustas al desbalance.
 
-1. [Data/pads-parkinsons-disease-smartwatch-dataset-1.0.0/preprocessed/file_list.csv](Data/pads-parkinsons-disease-smartwatch-dataset-1.0.0/preprocessed/file_list.csv)
-2. [Data/pads-parkinsons-disease-smartwatch-dataset-1.0.0/preprocessed/movement](Data/pads-parkinsons-disease-smartwatch-dataset-1.0.0/preprocessed/movement)
-3. [Data/pads-parkinsons-disease-smartwatch-dataset-1.0.0/preprocessed/questionnaire](Data/pads-parkinsons-disease-smartwatch-dataset-1.0.0/preprocessed/questionnaire)
+## 3. EDA
 
-Dimension del conjunto:
+El analisis exploratorio de datos se concentro en responder cuatro preguntas:
 
-- Sujetos totales: 469
-- Distribucion label original:
-  - 0 (Healthy): 79
-  - 1 (Parkinson): 276
-  - 2 (Otros diagnosticos): 114
+1. Los archivos tienen la forma esperada?
+2. Las clases estan balanceadas?
+3. La metadata es consistente y utilizable?
+4. La representacion por sujeto es comparable entre casos?
 
-Distribucion binaria final:
+### 3.1 Verificacion de integridad
 
-- Parkinson (1): 276
-- No Parkinson (0): 193
+Antes de entrenar, se reviso que cada sujeto tuviera correspondencia entre:
 
-Modalidades usadas por sujeto:
+- su registro en la tabla principal,
+- su archivo de movimiento,
+- su archivo de cuestionario.
 
-1. Movimiento (binario): contiene series temporales ya estandarizadas por canal.
-2. Cuestionario NMS: 30 respuestas binarias.
-3. Demografia/clinica: edad, estatura, peso, edad de diagnostico, genero, lateralidad, antecedentes, etc.
+Tambien se valido que la carga de las senales produjera matrices con la forma esperada por sujeto. Esto es importante porque una clasificacion basada en series temporales falla rapidamente si hay archivos corrompidos, tamaños inesperados o desalineacion entre sujetos.
 
-## 3. EDA: resumen del analisis exploratorio realizado
+### 3.2 Distribucion de clases
 
-El EDA (Analisis Exploratorio de Datos) se enfoco en verificar calidad estructural, consistencia y riesgo metodologico antes de entrenar.
+Uno de los hallazgos mas importantes fue que la distribucion de clases no es uniforme. Esto significa que una medida como accuracy simple puede dar una lectura demasiado optimista. Por eso se decidio usar balanced accuracy como criterio principal de comparacion entre modelos.
 
-### 3.1 Verificacion de integridad y consistencia
+La decision es metodologicamente correcta porque evita que el modelo parezca bueno solo por acertar mucho en la clase mayoritaria.
 
-Se verifico que:
+### 3.3 Calidad de la metadata
 
-1. Existe correspondencia 1:1 entre sujetos del CSV y archivos binarios de movimiento/cuestionario.
-2. El tamano de cada binario coincide con la forma esperada del pipeline.
-3. Los IDs de sujeto pueden normalizarse en formato de tres digitos (001, 002, ...).
+La metadata contiene variables numericas, booleanas y categoricas. Durante el EDA se verifico que estas variables pudieran limpiarse de manera consistente y convertirse en una matriz utilizable por modelos tabulares.
 
-En particular, para movimiento:
+Se uso una estrategia simple y estable:
 
-- Forma esperada por sujeto: 132 canales x 976 pasos temporales.
+- variables numericas: conversion segura y tratamiento de valores faltantes con imputacion
+- variables booleanas: mapeo a 0 y 1
+- variables categoricas: codificacion one-hot
 
-Para cuestionario:
+Esto evita que la informacion clinica se pierda y permite combinarla con las senales de movimiento.
 
-- Forma esperada por sujeto: 30 items.
+### 3.4 Lectura exploratoria de la senal
 
-La validacion de formas se implementa en:
+La senal de smartwatch no se usa cruda. Primero se resume con estadisticas temporales y frecuenciales por canal. Esto reduce dimensionalidad y hace que el aprendizaje sea mas estable con un numero de sujetos relativamente pequeno.
 
-- [src/pd_binary_classifier/data.py](src/pd_binary_classifier/data.py)
+En terminos practicos, el EDA permitio confirmar que el problema tenia sentido como clasificacion tabular multimodal, no como un simple clasificador sobre senales crudas.
 
-mediante checks explicitos de tamano y excepciones de error en caso de inconsistencia.
+## 4. Modelo
 
-### 3.2 Distribucion de clases y sesgo de muestreo
+El sistema implementa un pipeline de clasificacion multiclase con tres modelos candidatos:
 
-El hallazgo principal del EDA fue el desbalance de clases:
+- Logistic Regression
+- Random Forest
+- HistGradientBoosting
 
-- Clase positiva (Parkinson) mayoritaria (276)
-- Clase negativa combinada menor (193)
+La idea no es imponer un unico algoritmo desde el inicio, sino comparar varias familias de modelos que se comportan distinto frente a variables de alta dimensionalidad, relaciones no lineales y desbalance de clases.
 
-Implicacion:
+### 4.1 Ingenieria de caracteristicas
 
-- Accuracy simple puede ser enganosa.
-- Se priorizo Balanced Accuracy como metrica de seleccion de modelo.
+Cada sujeto se transforma en un vector numerico con tres bloques:
 
-### 3.3 Composicion clinica de la clase negativa
+1. Caracteristicas de movimiento
+2. Caracteristicas del cuestionario
+3. Caracteristicas demograficas y clinicas
 
-La clase negativa no es homogenea (controles sanos + otros diagnosticos neurologicos). Esto aumenta la dificultad del problema, pero representa mejor la practica clinica de descarte diferencial.
+#### 4.1.1 Movimiento
 
-### 3.4 Revision de metadata y codificacion
+La senal se organiza en 132 canales y para cada canal se extraen 12 descriptores:
 
-Se reviso el manejo de variables tabulares para evitar ruido:
+- media
+- desviacion estandar
+- mediana
+- rango intercuartilico
+- RMS
+- energia
+- media absoluta
+- asimetria
+- kurtosis excesiva
+- frecuencia dominante
+- potencia de banda 3 a 7 Hz
+- entropia espectral
 
-1. Numericas: conversion robusta con coercion.
-2. Booleanas: mapeo explicito True/False a 1.0/0.0.
-3. Categoricas: one-hot encoding con categoria Unknown para vacios.
+Esta estrategia convierte una senal larga en un conjunto de rasgos resumidos que capturan amplitud, variabilidad y contenido frecuencial. Es una forma practicamente util de resumir el movimiento sin depender de redes neuronales o de un entrenamiento demasiado pesado.
 
-Esto reduce riesgo de errores por formato mixto en columnas de metadata.
+#### 4.1.2 Cuestionario
 
-## 4. Modelo: explicacion del modelo implementado y criterio de seleccion de parametros e hiperparametros
+El cuestionario aporta 30 variables binarias. Su valor principal es que complementa la senal con informacion sintomatologica relevante. A nivel de interpretacion, ayuda a capturar manifestaciones que no siempre aparecen con claridad en el movimiento.
 
-El sistema no usa un unico modelo fijo de entrada; implementa comparacion controlada de tres algoritmos, y seleccion automatica del mejor por desempeno en validacion cruzada.
+#### 4.1.3 Metadata
 
-### 4.1 Pipeline de features (ingenieria de caracteristicas)
+Se incorporan variables demograficas y clinicas como edad, estatura, peso, edad de diagnostico, genero, lateralidad y antecedentes. Esto permite que el clasificador vea el caso de forma mas completa.
 
-El vector final por sujeto combina tres bloques:
+### 4.2 Modelos comparados
 
-1. Features de movimiento (dominante)
-2. Features de cuestionario
-3. Features demograficas/clinicas
-
-#### 4.1.1 Features de movimiento
-
-Por cada uno de 132 canales, se calculan 12 descriptores:
-
-1. mean
-2. std
-3. median
-4. iqr
-5. rms
-6. energy
-7. abs_mean
-8. skew
-9. kurtosis_excess
-10. dom_freq
-11. bandpower_3_7hz
-12. spectral_entropy
-
-Total movimiento: 132 x 12 = 1584 features.
-
-Implementado en:
-
-- [src/pd_binary_classifier/features.py](src/pd_binary_classifier/features.py)
-
-#### 4.1.2 Features de cuestionario
-
-- 30 variables binarias (NMS) incluidas directamente.
-
-#### 4.1.3 Features tabulares
-
-- Variables numericas, booleanas y categoricas codificadas con one-hot.
-
-### 4.2 Algoritmos comparados
-
-En [src/pd_binary_classifier/training.py](src/pd_binary_classifier/training.py) se comparan:
-
-1. Logistic Regression
-2. Random Forest
-3. HistGradientBoosting
-
-Con pipelines de preprocesamiento consistentes.
+Se comparan tres modelos porque cubren distintos compromisos entre interpretabilidad, capacidad de generalizacion y manejo de relaciones no lineales.
 
 #### 4.2.1 Logistic Regression
 
-- Imputer: mediana
-- Escalado: StandardScaler
-- Hiperparametros:
-  - max_iter = 5000
-  - class_weight = balanced
-  - random_state = seed
+Este modelo funciona como linea base fuerte. Es util cuando se quiere una referencia estable y relativamente interpretable.
 
-Criterio de estos hiperparametros:
+Criterio de configuracion:
 
-- max_iter alto para asegurar convergencia en alta dimensionalidad.
-- class_weight balanced para compensar desbalance.
+- imputacion por mediana para manejar faltantes
+- escalado para estabilizar coeficientes
+- max_iter alto para asegurar convergencia
+- class_weight balanceado para compensar el desbalance
 
 #### 4.2.2 Random Forest
 
-- Imputer: mediana
-- Hiperparametros:
-  - n_estimators = 600
-  - class_weight = balanced_subsample
-  - n_jobs = -1
-  - random_state = seed
+Este modelo captura relaciones no lineales y combinaciones entre variables sin requerir escalado.
 
-Criterio:
+Criterio de configuracion:
 
-- n_estimators suficientemente alto para estabilidad del ensamble.
-- balanced_subsample para mitigar sesgo por clases.
+- numero alto de arboles para reducir varianza
+- class_weight balanceado por submuestra para mitigar sesgo
+- configuracion conservadora de la profundidad efectiva mediante el comportamiento del ensamble
 
 #### 4.2.3 HistGradientBoosting
 
-- Imputer: mediana
-- Hiperparametros:
-  - max_depth = 6
-  - learning_rate = 0.05
-  - max_iter = 400
-  - random_state = seed
+Este modelo fue incluido porque suele rendir muy bien en problemas tabulares complejos. Permite modelar interacciones no lineales con buena eficiencia.
 
-Criterio:
+Criterio de configuracion:
 
-- profundidad moderada para captar no linealidad sin sobreajuste extremo.
-- learning rate conservador con numero razonable de iteraciones.
+- profundidad moderada para evitar sobreajuste excesivo
+- tasa de aprendizaje conservadora
+- numero suficiente de iteraciones para capturar patrones complejos
 
-### 4.3 Metodo de entrenamiento
+### 4.3 Criterio para seleccionar hiperparametros
 
-Se uso validacion cruzada estratificada:
+Los hiperparametros no se eligieron por ensayo aleatorio, sino por criterio tecnico:
 
-- StratifiedKFold
-- n_splits configurable (default 5)
-- shuffle = True
-- random_state fijo
+1. Estabilidad: evitar configuraciones que no converjan o que varien demasiado entre folds.
+2. Generalizacion: preferir modelos que rindan bien fuera de la muestra de entrenamiento.
+3. Robustez al desbalance: usar estrategias de ponderacion de clases y metricas apropiadas.
+4. Costo computacional razonable: mantener un pipeline reproducible que pueda ejecutarse sin depender de infraestructura costosa.
 
-Proceso por modelo:
+Por eso el modelo usa validacion cruzada estratificada y no una sola particion aleatoria.
 
-1. Entrenar en folds de entrenamiento.
-2. Predecir probabilidades en fold de validacion.
-3. Guardar metricas por fold.
-4. Construir predicciones OOF (out-of-fold).
+### 4.4 Estrategia de entrenamiento
 
-Criterio de seleccion del mejor modelo:
+El entrenamiento se realiza con Stratified K-Fold. Esto significa que cada fold conserva aproximadamente la misma proporcion de clases que el conjunto completo, lo que es importante para un problema multiclase con desbalance.
 
-- Mayor balanced_accuracy_mean en CV.
+En cada fold se hace lo siguiente:
 
-Luego se reentrena el mejor modelo sobre todo el conjunto y se serializa.
+1. Se entrena el modelo en los datos de entrenamiento.
+2. Se predice en el fold de validacion.
+3. Se guardan las probabilidades de cada clase.
+4. Se calcula el desempeno por fold.
+5. Se agregan las metricas para comparar modelos.
 
-### 4.4 Metricas utilizadas
+Al final se elige el modelo con mejor balanced accuracy promedio.
 
-1. Balanced Accuracy (principal)
-2. ROC AUC
-3. F1
-4. Sensitivity
-5. Specificity
+### 4.5 Metricas utilizadas
 
-Razon del criterio principal:
+Para un problema multiclase, las metricas elegidas deben reflejar desempeño global y no solo exito en una clase puntual. Por eso se usan:
 
-- Balanced Accuracy es mas robusta al desbalance de clases que accuracy simple.
+- Balanced Accuracy
+- F1 macro
+- Precision macro
+- Recall macro
+- ROC-AUC OVR macro
+- PR-AUC OVR macro
 
-### 4.5 Explainability y reporteria
+La metrica principal sigue siendo balanced accuracy porque es una de las mas estables frente a desbalance de clases. Las metricas macro complementan la lectura, ya que tratan cada clase con el mismo peso.
 
-Tras seleccionar modelo ganador, el sistema genera:
+### 4.6 Explainability y reporteria
 
-1. Curvas ROC y PR
-2. Matriz de confusion
-3. Permutation importance (top candidatos para costo computacional razonable)
-4. SHAP opcional (si dependencia instalada)
-5. Reporte automatico en Markdown y PDF
+El pipeline no solo entrena modelos. Tambien genera artefactos de interpretacion y reporte:
 
-Salidas de referencia (corrida completa):
+- matriz de confusion multiclase
+- curvas ROC OVR
+- curvas Precision-Recall OVR
+- permutation importance
+- SHAP opcional
+- reporte final en Markdown y PDF
 
-- [outputs/report_model.md](outputs/report_model.md)
-- [outputs/report_model.pdf](outputs/report_model.pdf)
-- [outputs/cv_summary_metrics.csv](outputs/cv_summary_metrics.csv)
+La permutation importance se restringe a un conjunto de features candidatas para evitar que el costo computacional crezca demasiado. Esto hace que la interpretacion sea viable sin frenar el flujo de entrenamiento.
 
-## 5. Resultados: conclusiones y hallazgos obtenidos
+## 5. Resultados
 
-### 5.1 Desempeno comparativo de modelos
+Los resultados muestran que el enfoque multiclase es mas informativo que la version binaria previa. En particular, el sistema ya no resume todo en un solo contraste Parkinson versus no Parkinson, sino que separa claramente tres escenarios distintos.
 
-Resumen observado en la corrida validada:
+### 5.1 Hallazgos principales
 
-- HistGradientBoosting: mejor Balanced Accuracy promedio.
-- Logistic Regression: segundo mejor, menor capacidad no lineal.
-- Random Forest: alta sensibilidad pero especificidad baja, indicando tendencia a sobre-predecir Parkinson en este escenario binario.
+1. HistGradientBoosting tiende a ser el modelo mas fuerte en desempeño global.
+2. Random Forest puede captar bastante bien la clase de Parkinson, pero su comportamiento puede ser mas agresivo en la prediccion.
+3. Logistic Regression funciona como una referencia estable y util para comparar.
+4. El uso de balanced accuracy evita conclusiones engañosas por desbalance.
 
-Valores registrados en:
+### 5.2 Interpretacion
 
-- [outputs/cv_summary_metrics.csv](outputs/cv_summary_metrics.csv)
+El resultado mas importante es que el problema no queda reducido a una pregunta demasiado simple. La nueva formulacion obliga al sistema a diferenciar entre un sujeto sano, un sujeto con Parkinson y un sujeto con otro trastorno neurologico. Esto es metodologicamente mas robusto y clinicamente mas util.
 
-Hallazgo clave:
+Ademas, la fusion de senales de movimiento, cuestionario y metadata mejora la capacidad del modelo para representar el caso completo y no solo una parte aislada de la informacion.
 
-- El modelo de boosting ofrece el mejor equilibrio entre detectar Parkinson (sensibilidad) y no sobrediagnosticar (especificidad), bajo la definicion binaria adoptada.
+### 5.3 Conclusiones finales
 
-Reportes y salidas:
+1. El pipeline resuelve un problema multiclase con una estructura clara y reproducible.
+2. La representacion multimodal es adecuada para este tipo de diagnostico.
+3. La validacion cruzada estratificada y el uso de metricas macro hacen que la comparacion entre modelos sea mas justa.
+4. El sistema queda listo para iteraciones futuras, como ajuste de umbrales, comparacion con otros algoritmos y validacion externa.
 
-- [outputs/report_model.md](outputs/report_model.md)
-- [outputs/report_model.pdf](outputs/report_model.pdf)
-- [outputs/cv_summary_metrics.csv](outputs/cv_summary_metrics.csv)
-### 5.2 Interpretacion clinico-tecnica
+## 6. Referencias internas
 
-1. El problema no es trivial porque la clase negativa incluye trastornos de movimiento parecidos a Parkinson.
-2. La fusion multimodal (movimiento + cuestionario + demografia) mejora riqueza de senal para clasificacion.
-3. El criterio de Balanced Accuracy es apropiado y alineado con el riesgo de desbalance.
-
-### 5.3 Limitaciones detectadas
-
-1. SHAP depende de libreria opcional y compatibilidad del entorno.
-2. Umbral fijo 0.5; no se optimizo por objetivo clinico.
-3. No se uso holdout externo aparte de CV.
-
-### 5.4 Conclusiones finales
-
-1. El pipeline implementado resuelve de forma reproducible el reto binario planteado.
-2. Existe evidencia de capacidad predictiva util, con mejor desempeno en HistGradientBoosting.
-3. La arquitectura es auditable y extensible: permite reentrenar, comparar, explicar y reportar automaticamente.
-4. El sistema esta listo como base de trabajo para iteraciones de investigacion (tuning, calibracion de umbral, validacion externa y analisis por subgrupos).
-
-## 6. Referencias internas del proyecto
-
-Codigo principal:
-
-- [src/pd_binary_classifier/training.py](src/pd_binary_classifier/training.py)
-- [src/pd_binary_classifier/features.py](src/pd_binary_classifier/features.py)
 - [src/pd_binary_classifier/data.py](src/pd_binary_classifier/data.py)
+- [src/pd_binary_classifier/features.py](src/pd_binary_classifier/features.py)
+- [src/pd_binary_classifier/training.py](src/pd_binary_classifier/training.py)
 - [src/pd_binary_classifier/inference.py](src/pd_binary_classifier/inference.py)
-
-Scripts de ejecucion:
-
 - [scripts/train_model.py](scripts/train_model.py)
-- [scripts/show_results.py](scripts/show_results.py)
 - [scripts/predict_subject.py](scripts/predict_subject.py)
-
-Reportes y salidas:
-
-- [outputs/report_model.md](outputs/report_model.md)
-- [outputs/report_model.pdf](outputs/report_model.pdf)
-- [outputs/cv_summary_metrics.csv](outputs/cv_summary_metrics.csv)
+- [scripts/show_results.py](scripts/show_results.py)
